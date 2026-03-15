@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Compile AR Target</title>
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1a1a1a; color: white; text-align: center; padding: 20px;}
+    h1 { color: #4f46e5; }
+    #status { font-size: 1.5rem; margin-top: 20px; color: #a3e635; }
+    .hidden { display: none; }
+    img { max-width: 300px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4); }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "mindar-image-compiler": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-compiler.prod.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <h1>AR Target Image Auto-Compiler</h1>
+  <p>Please wait while we generate the tracking file for your construction plan...</p>
+  <div id="status">Loading...</div>
+  <img id="preview" src="/land.png" style="display:none;" />
+
+  <script type="module">
+    import { Compiler } from 'mindar-image-compiler';
+    
+    window.onload = () => {
+      const img = document.getElementById('preview');
+      img.style.display = 'block';
+      const status = document.getElementById('status');
+      
+      status.innerText = 'Initializing Compiler...';
+      
+      setTimeout(async () => {
+        try {
+          const compiler = new Compiler();
+          await compiler.compileImageTargets([img], (progress) => {
+            status.innerText = `Compiling: ${progress.toFixed(2)}%`;
+          });
+          
+          status.innerText = 'Generating file...';
+          const exportedBuffer = await compiler.exportData();
+          const blob = new Blob([exportedBuffer], { type: 'application/octet-stream' });
+          
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'land.mind';
+          a.click();
+          
+          status.innerHTML = `<span style="color:#fbbf24">Download started!</span><br/><br/>
+            IMPORTANT: <br/>
+            1. Find <b>land.mind</b> in your Downloads folder.<br/>
+            2. Move it to <b>d:\\consultancy\\frontend\\public\\land.mind</b> (Overwrite the old one!).<br/>
+            3. Refresh your AR Viewer page.`;
+        } catch (err) {
+          status.innerText = 'Error compiling: ' + err.message;
+        }
+      }, 500);
+    };
+  </script>
+</body>
+</html>

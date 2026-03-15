@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AR Viewer</title>
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    a-scene { width: 100%; height: 100%; }
+    #status-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 13px;
+      padding: 8px 16px;
+      display: flex;
+      gap: 1rem;
+      z-index: 9999;
+    }
+    #status-bar span { color: #a3e635; }
+    #controls {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.75);
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 12px;
+      padding: 6px 16px;
+      display: flex;
+      gap: 1.2rem;
+      align-items: center;
+      z-index: 9999;
+      flex-wrap: wrap;
+    }
+    #controls label { display: flex; gap: 4px; align-items: center; }
+    #controls input[type=range] { width: 80px; }
+    #quick-actions {
+      position: fixed;
+      right: 16px;
+      bottom: 56px;
+      display: flex;
+      gap: 0.6rem;
+      z-index: 9999;
+    }
+    #quick-actions button {
+      border: 0;
+      border-radius: 999px;
+      padding: 0.7rem 1rem;
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      font: inherit;
+      cursor: pointer;
+    }
+    /* Invisible touch/mouse interaction layer */
+    #interact-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      cursor: grab;
+      touch-action: none; /* let JS handle all touch */
+    }
+    #interact-overlay:active { cursor: grabbing; }
+    #interact-hint {
+      position: fixed;
+      top: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      color: #a3e635;
+      font-family: sans-serif;
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      pointer-events: none;
+      z-index: 9999;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>Scale <input type="range" id="ctrl-scale" min="0.01" max="1" step="0.01" value="0.08"> <span id="ctrl-scale-val">0.08</span></label>
+    <label>Rot X <input type="range" id="ctrl-rotx" min="-180" max="180" step="1" value="0"> <span id="ctrl-rotx-val">0</span></label>
+    <label>Rot Y <input type="range" id="ctrl-roty" min="-180" max="180" step="1" value="0"> <span id="ctrl-roty-val">0</span></label>
+    <label>Pos Y <input type="range" id="ctrl-posy" min="-1" max="2" step="0.01" value="0"> <span id="ctrl-posy-val">0</span></label>
+  </div>
+  <div id="status-bar">
+    <div>Camera: <span id="s-cam">Starting...</span></div>
+    <div>Marker: <span id="s-marker">Not detected</span></div>
+    <div>Model: <span id="s-model">Loading...</span></div>
+  </div>
+  <div id="quick-actions">
+    <button type="button" id="rotate-left">Rotate Left</button>
+    <button type="button" id="rotate-right">Rotate Right</button>
+    <button type="button" id="reset-view">Reset</button>
+  </div>
+
+  <!-- Interaction overlay: captures mouse/touch drag & pinch over the AR scene -->
+  <div id="interact-overlay"></div>
+  <div id="interact-hint">Drag to rotate &nbsp;|&nbsp; Scroll / Pinch to scale</div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const mindSrc   = params.get("mind")  || "/land.mind";
+    const modelSrc  = params.get("model") || "/models/house_3_floors.glb";
+    const scaleVal  = params.get("scale") || "0.08 0.08 0.08";
+    const rotVal    = params.get("rot")   || "0 0 0";
+
+    // Build the scene dynamically so attribute values are pure strings (no JSX quirks)
+    const scene = document.createElement("a-scene");
+    scene.setAttribute("mindar-image",
+      `imageTargetSrc: ${mindSrc}; autoStart: true; uiLoading: yes; uiScanning: yes; filterMinCF: 0.0001; filterBeta: 0.001;`);
+    scene.setAttribute("color-space",  "sRGB");
+    scene.setAttribute("renderer",     "colorManagement: true, physicallyCorrectLights: true");
+    scene.setAttribute("vr-mode-ui",   "enabled: false");
+    scene.setAttribute("device-orientation-permission-ui", "enabled: false");
+    scene.setAttribute("embedded", "");
+    scene.style.cssText = "width:100%;height:100%;";
+
+    scene.innerHTML = `
+      <a-assets>
+        <a-asset-item id="house-model" src="${modelSrc}"></a-asset-item>
+      </a-assets>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-light type="ambient"     color="#fff" intensity="2.0"></a-light>
+      <a-light type="directional" color="#fff" intensity="1.5" position="1 3 1"></a-light>
+      <a-light type="directional" color="#fff" intensity="0.8" position="-1 2 -1"></a-light>
+      <a-entity mindar-image-target="targetIndex: 0">
+        <a-entity
+          id="house-entity"
+          gltf-model="#house-model"
+          scale="${scaleVal}"
+          rotation="${rotVal}"
+          position="0 0 0"
+        ></a-entity>
+      </a-entity>
+    `;
+
+    document.body.appendChild(scene);
+
+    // Status events
+    scene.addEventListener("arReady", () => {
+      document.getElementById("s-cam").textContent = "Active";
+    });
+    scene.addEventListener("arError", () => {
+      document.getElementById("s-cam").textContent = "ERROR - allow camera permission";
+      document.getElementById("s-cam").style.color = "#f87171";
+    });
+
+    scene.addEventListener("loaded", () => {
+      const target = scene.querySelector("[mindar-image-target]");
+      const modelEl = scene.querySelector("#house-entity");
+
+      if (target) {
+        target.addEventListener("targetFound", () => {
+          document.getElementById("s-marker").textContent = "Detected";
+          document.getElementById("s-marker").style.color = "#a3e635";
+        });
+        target.addEventListener("targetLost", () => {
+          document.getElementById("s-marker").textContent = "Lost";
+          document.getElementById("s-marker").style.color = "#fbbf24";
+        });
+      }
+
+      if (modelEl) {
+        modelEl.addEventListener("model-loaded", () => {
+          document.getElementById("s-model").textContent = "Loaded";
+        });
+        modelEl.addEventListener("model-error", () => {
+          document.getElementById("s-model").textContent = "FAILED";
+          document.getElementById("s-model").style.color = "#f87171";
+        });
+      }
+    });
+
+    // Live controls
+    function applyControls() {
+      const modelEl = scene.querySelector("#house-entity");
+      if (!modelEl) return;
+      const s  = parseFloat(document.getElementById("ctrl-scale").value);
+      const rx = parseFloat(document.getElementById("ctrl-rotx").value);
+      const ry = parseFloat(document.getElementById("ctrl-roty").value);
+      const py = parseFloat(document.getElementById("ctrl-posy").value);
+      document.getElementById("ctrl-scale-val").textContent = s.toFixed(2);
+      document.getElementById("ctrl-rotx-val").textContent = rx;
+      document.getElementById("ctrl-roty-val").textContent = ry;
+      document.getElementById("ctrl-posy-val").textContent = py.toFixed(2);
+      modelEl.setAttribute("scale", `${s} ${s} ${s}`);
+      modelEl.setAttribute("rotation", `${rx} ${ry} 0`);
+      modelEl.setAttribute("position", `0 ${py} 0`);
+    }
+
+    function setRotationY(nextValue) {
+      const rotationInput = document.getElementById("ctrl-roty");
+      rotationInput.value = String(nextValue);
+      applyControls();
+    }
+
+    ["ctrl-scale","ctrl-rotx","ctrl-roty","ctrl-posy"].forEach(id => {
+      document.getElementById(id).addEventListener("input", applyControls);
+    });
+
+    document.getElementById("rotate-left").addEventListener("click", () => {
+      const current = parseFloat(document.getElementById("ctrl-roty").value);
+      setRotationY(current - 15);
+    });
+
+    document.getElementById("rotate-right").addEventListener("click", () => {
+      const current = parseFloat(document.getElementById("ctrl-roty").value);
+      setRotationY(current + 15);
+    });
+
+    document.getElementById("reset-view").addEventListener("click", () => {
+      document.getElementById("ctrl-scale").value = "0.08";
+      document.getElementById("ctrl-rotx").value = "0";
+      document.getElementById("ctrl-roty").value = "0";
+      document.getElementById("ctrl-posy").value = "0";
+      applyControls();
+    });
+
+    applyControls();
+
+    // ── Drag-to-rotate & scroll/pinch-to-scale interaction ──────────────────
+    const overlay = document.getElementById("interact-overlay");
+    const hint    = document.getElementById("interact-hint");
+
+    // Show hint briefly when marker is first found
+    scene.addEventListener("loaded", () => {
+      const target = scene.querySelector("[mindar-image-target]");
+      if (target) {
+        target.addEventListener("targetFound", () => {
+          hint.style.opacity = "1";
+          setTimeout(() => { hint.style.opacity = "0"; }, 3000);
+        });
+      }
+    });
+
+    function getScale()  { return parseFloat(document.getElementById("ctrl-scale").value); }
+    function getRotX()   { return parseFloat(document.getElementById("ctrl-rotx").value); }
+    function getRotY()   { return parseFloat(document.getElementById("ctrl-roty").value); }
+
+    function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+
+    function setAndApply({ s, rx, ry }) {
+      if (s  !== undefined) { document.getElementById("ctrl-scale").value = clamp(s,  0.01, 1).toFixed(3); }
+      if (rx !== undefined) { document.getElementById("ctrl-rotx").value  = clamp(rx, -180, 180).toFixed(1); }
+      if (ry !== undefined) { document.getElementById("ctrl-roty").value  = clamp(ry, -180, 180).toFixed(1); }
+      applyControls();
+    }
+
+    // ── Mouse ────────────────────────────────────────────────────────────────
+    let mouse = { down: false, x: 0, y: 0 };
+
+    overlay.addEventListener("mousedown", (e) => {
+      mouse.down = true;
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!mouse.down) return;
+      const dx = e.clientX - mouse.x;
+      const dy = e.clientY - mouse.y;
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+      setAndApply({ ry: getRotY() + dx * 0.4, rx: getRotX() + dy * 0.4 });
+    });
+
+    window.addEventListener("mouseup", () => { mouse.down = false; });
+
+    overlay.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.005 : 0.005;
+      setAndApply({ s: getScale() + delta });
+    }, { passive: false });
+
+    // ── Touch ────────────────────────────────────────────────────────────────
+    let touch = { active: false, x: 0, y: 0, dist: 0 };
+
+    function touchDist(t) {
+      const dx = t[0].clientX - t[1].clientX;
+      const dy = t[0].clientY - t[1].clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    overlay.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      touch.active = true;
+      if (e.touches.length === 1) {
+        touch.x = e.touches[0].clientX;
+        touch.y = e.touches[0].clientY;
+        touch.dist = 0;
+      } else if (e.touches.length === 2) {
+        touch.dist = touchDist(e.touches);
+      }
+    }, { passive: false });
+
+    overlay.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      if (!touch.active) return;
+
+      if (e.touches.length === 1) {
+        // single finger → rotate
+        const dx = e.touches[0].clientX - touch.x;
+        const dy = e.touches[0].clientY - touch.y;
+        touch.x = e.touches[0].clientX;
+        touch.y = e.touches[0].clientY;
+        setAndApply({ ry: getRotY() + dx * 0.5, rx: getRotX() + dy * 0.5 });
+      } else if (e.touches.length === 2) {
+        // two fingers → pinch scale
+        const newDist = touchDist(e.touches);
+        if (touch.dist > 0) {
+          const ratio = newDist / touch.dist;
+          setAndApply({ s: getScale() * ratio });
+        }
+        touch.dist = newDist;
+      }
+    }, { passive: false });
+
+    overlay.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      if (e.touches.length === 0) touch.active = false;
+      else if (e.touches.length === 1) {
+        // went from 2 fingers to 1, reset single-finger origin
+        touch.x = e.touches[0].clientX;
+        touch.y = e.touches[0].clientY;
+        touch.dist = 0;
+      }
+    }, { passive: false });
+    // ─────────────────────────────────────────────────────────────────────────
+  </script>
+</body>
+</html>
