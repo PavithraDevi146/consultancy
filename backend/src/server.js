@@ -30,6 +30,14 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "constructar-api" });
 });
 
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "constructar-api",
+    health: "/api/health",
+  });
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/homes", homeRoutes);
 app.use("/api/interiors", interiorRoutes);
